@@ -1,4 +1,8 @@
 # Byte-compiled / optimized / DLL files
+anything.py
+anything.ipynb
+job_scripts/
+habitat_baselines/configs
 __pycache__/
 *.py[cod]
 

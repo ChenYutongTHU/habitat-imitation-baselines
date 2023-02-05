@@ -4,7 +4,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-import copy, json
+import copy
 import os
 import time
 
@@ -15,11 +15,12 @@ import numpy as np
 import torch
 import tqdm
 from torch.optim.lr_scheduler import LambdaLR
+from gym import spaces
 
 from habitat import Config, logger
 from habitat.utils import profiling_wrapper
 from habitat.utils.visualizations.utils import observations_to_image
-
+from habitat.code.spaces import ActionSpace
 from habitat_baselines.common.base_trainer import BaseRLTrainer
 from habitat_baselines.common.baseline_registry import baseline_registry
 from habitat_baselines.common.environments import get_env_class
@@ -28,8 +29,8 @@ from habitat_baselines.common.obs_transformers import (
     apply_obs_transforms_obs_space,
     get_active_obs_transforms,
 )
-from habitat_baselines.il.env_based.common.rollout_storage import RolloutStorage
-from habitat_baselines.il.env_based.algos.agent import ILAgent
+from habitat_baselines.il.precomputed_feature.common.rollout_storage import RolloutStorage
+from habitat_baselines.il.precomputed_feature.algos.agent import ILAgent
 from habitat_baselines.common.tensorboard_utils import TensorboardWriter
 from habitat_baselines.utils.common import (
     batch_obs,
@@ -37,11 +38,12 @@ from habitat_baselines.utils.common import (
     linear_decay,
 )
 from habitat_baselines.utils.env_utils import construct_envs
-from habitat_baselines.il.env_based.policy.rednet import load_rednet
+from habitat_baselines.il.precomputed_feature.envs.offline_envs import ObjectNavEnv_Offline
 
 
-@baseline_registry.register_trainer(name="il-trainer")
-class ILEnvTrainer(BaseRLTrainer):
+
+@baseline_registry.register_trainer(name="il-trainer-precomputedfeature")
+class ILEnvTrainerPrecomputedfeature(BaseRLTrainer):
     r"""Trainer class for behavior cloning.
     """
     supported_tasks = ["ObjectNav-v1"]
@@ -55,7 +57,7 @@ class ILEnvTrainer(BaseRLTrainer):
         if config is not None:
             logger.info(f"config: {config}")
 
-    def _setup_actor_critic_agent(self, il_cfg: Config, model_config: Config) -> None:
+    def _setup_actor_critic_agent(self, il_cfg: Config, model_config: Config, mode: str) -> None:
         r"""Sets up actor critic and agent for PPO.
 
         Args:
@@ -66,6 +68,7 @@ class ILEnvTrainer(BaseRLTrainer):
         """
         logger.add_filehandler(self.config.LOG_FILE)
 
+
         observation_space = self.envs.observation_spaces[0]
         self.obs_transforms = get_active_obs_transforms(self.config)
         observation_space = apply_obs_transforms_obs_space(
@@ -73,17 +76,20 @@ class ILEnvTrainer(BaseRLTrainer):
         )
         self.obs_space = observation_space
 
+
+
         model_config.defrost()
         model_config.TORCH_GPU_ID = self.config.TORCH_GPU_ID
         model_config.freeze()
 
         policy = baseline_registry.get_policy(self.config.IL.POLICY.name)
         self.policy = policy.from_config(
-            self.config, observation_space, self.envs.action_spaces[0]
+            self.config, self.obs_space, self.envs.action_spaces[0], mode=mode
         )
         self.policy.to(self.device)
 
         self.semantic_predictor = None
+        ''''
         if model_config.USE_PRED_SEMANTICS:
             self.semantic_predictor = load_rednet(
                 self.device,
@@ -92,8 +98,10 @@ class ILEnvTrainer(BaseRLTrainer):
                 num_classes=model_config.SEMANTIC_ENCODER.num_classes
             )
             self.semantic_predictor.eval()
+        '''
 
         self.agent = ILAgent(
+            mode = mode, 
             model=self.policy,
             num_envs=self.envs.num_envs,
             num_mini_batch=il_cfg.num_mini_batch,
@@ -104,13 +112,10 @@ class ILEnvTrainer(BaseRLTrainer):
 
     def _make_results_dir(self, split="val"):
         r"""Makes directory for saving eqa-cnn-pretrain eval results."""
-        name2dir = {}
-        for s_type in ["rgb", "seg", "depth", "top_down_map","stats"]:
+        for s_type in ["rgb", "seg", "depth", "top_down_map"]:
             dir_name = self.config.RESULTS_DIR.format(split=split, type=s_type)
-            name2dir[s_type] = dir_name
             if not os.path.isdir(dir_name):
                 os.makedirs(dir_name)
-        return name2dir
 
     @profiling_wrapper.RangeContext("save_checkpoint")
     def save_checkpoint(
@@ -188,78 +193,18 @@ class ILEnvTrainer(BaseRLTrainer):
 
         return results
 
-    @profiling_wrapper.RangeContext("_collect_rollout_step")
-    def _collect_rollout_step(
-        self, rollouts, current_episode_reward, running_episode_stats
-    ):
-        pth_time = 0.0
-        env_time = 0.0
+    def _collect_rollout_batch(self, rollouts):
+        batch = self.envs.next_batch(device=self.device)
+        rewards_batch = rollouts.rewards
+        actions_batch = batch['demonstrations'] ##T,E,1
+        masks_batch = (not batch['done']).unsqueeze(-1) #T,E,1
 
-        t_sample_action = time.time()
-
-        # fetch actions and environment state from replay buffer
-        next_actions = rollouts.get_next_actions()
-        actions = next_actions.long().unsqueeze(-1)
-        step_data = [a.item() for a in next_actions.long().to(device="cpu")]
-
-        pth_time += time.time() - t_sample_action
-
-        t_step_env = time.time()
-        profiling_wrapper.range_pop()  # compute actions
-
-        outputs = self.envs.step(step_data)
-        observations, rewards_l, dones, infos = [
-            list(x) for x in zip(*outputs)
-        ]
-
-        env_time += time.time() - t_step_env
-
-        t_update_stats = time.time()
-        batch = batch_obs(observations, device=self.device)
-        if self.config.MODEL.USE_PRED_SEMANTICS and self.current_update >= self.config.MODEL.SWITCH_TO_PRED_SEMANTICS_UPDATE:
-            batch["semantic"] = self.semantic_predictor(batch["rgb"], batch["depth"])
-            # Subtract 1 from class labels for THDA YCB categories
-            if self.config.MODEL.SEMANTIC_ENCODER.is_thda:
-                batch["semantic"] = batch["semantic"] - 1
-        batch = apply_obs_transforms_batch(batch, self.obs_transforms)
-
-        rewards = torch.tensor(
-            rewards_l, dtype=torch.float, device=current_episode_reward.device
+        rollouts.insert_batch(
+            observations_batch = batch['observations'],
+            actions_batch = actions_batch, #demonstrations? (next! or this noe)
+            rewards_batch = rewards_batch,
+            masks_batch = masks_batch, #need a mark!
         )
-        rewards = rewards.unsqueeze(1)
-
-        masks = torch.tensor(
-            [[0.0] if done else [1.0] for done in dones],
-            dtype=torch.float,
-            device=current_episode_reward.device,
-        )
-
-        current_episode_reward += rewards
-        running_episode_stats["reward"] += (1 - masks) * current_episode_reward  # type: ignore
-        running_episode_stats["count"] += 1 - masks  # type: ignore
-        for k, v_k in self._extract_scalars_from_infos(infos).items():
-            v = torch.tensor(
-                v_k, dtype=torch.float, device=current_episode_reward.device
-            ).unsqueeze(1)
-            if k not in running_episode_stats:
-                running_episode_stats[k] = torch.zeros_like(
-                    running_episode_stats["count"]
-                )
-
-            running_episode_stats[k] += (1 - masks) * v  # type: ignore
-
-        current_episode_reward *= masks
-
-        rollouts.insert(
-            batch,
-            actions,
-            rewards,
-            masks,
-        )
-
-        pth_time += time.time() - t_update_stats
-
-        return pth_time, env_time, self.envs.num_envs
 
     @profiling_wrapper.RangeContext("_update_agent")
     def _update_agent(self, ppo_cfg, rollouts):
@@ -287,9 +232,12 @@ class ILEnvTrainer(BaseRLTrainer):
             num_steps_to_capture=self.config.PROFILING.NUM_STEPS_TO_CAPTURE,
         )
 
+        '''
         self.envs = construct_envs(
             self.config, get_env_class(self.config.ENV_NAME)
         )
+        '''
+        self.envs = ObjectNavEnv_Offline(self.config) #include dataset and dataloader
 
         il_cfg = self.config.IL.BehaviorCloning
         self.device = (
@@ -300,7 +248,7 @@ class ILEnvTrainer(BaseRLTrainer):
         if not os.path.isdir(self.config.CHECKPOINT_FOLDER):
             os.makedirs(self.config.CHECKPOINT_FOLDER)
 
-        self._setup_actor_critic_agent(il_cfg, self.config.MODEL)
+        self._setup_actor_critic_agent(il_cfg, self.config.MODEL, mode='offline')
         logger.info(
             "agent number of parameters: {}".format(
                 sum(param.numel() for param in self.agent.parameters())
@@ -322,7 +270,8 @@ class ILEnvTrainer(BaseRLTrainer):
         batch = apply_obs_transforms_batch(batch, self.obs_transforms)
 
         for sensor in rollouts.observations:
-            rollouts.observations[sensor][0].copy_(batch[sensor])
+            rollouts.observations[sensor][0].copy_(batch[sensor]) #copy the first step
+            '''
             # Use first semantic observations from RedNet predictor as well
             if sensor == "semantic" and self.config.MODEL.USE_PRED_SEMANTICS:
                 semantic_obs = self.semantic_predictor(batch["rgb"], batch["depth"])
@@ -330,12 +279,14 @@ class ILEnvTrainer(BaseRLTrainer):
                 if self.config.MODEL.SEMANTIC_ENCODER.is_thda:
                     semantic_obs = semantic_obs - 1
                 rollouts.observations[sensor][0].copy_(semantic_obs)
+            '''
 
         # batch and observations may contain shared PyTorch CUDA
         # tensors.  We must explicitly clear them here otherwise
         # they will be kept in memory for the entire duration of training!
         batch = None
         observations = None
+
 
         current_episode_reward = torch.zeros(self.envs.num_envs, 1)
         running_episode_stats = dict(
@@ -375,6 +326,7 @@ class ILEnvTrainer(BaseRLTrainer):
                         update, self.config.NUM_UPDATES
                     )
 
+                '''
                 profiling_wrapper.range_push("rollouts loop")
                 for _step in range(il_cfg.num_steps):
                     (
@@ -388,7 +340,8 @@ class ILEnvTrainer(BaseRLTrainer):
                     env_time += delta_env_time
                     count_steps += delta_steps
                 profiling_wrapper.range_pop()  # rollouts loop
-
+                '''
+                self._collect_rollout_batch() #return il_cfg.num_steps (batch) of samples 
                 (
                     delta_pth_time,
                     total_loss
@@ -490,11 +443,9 @@ class ILEnvTrainer(BaseRLTrainer):
             None
         """
         # Map location CPU is almost always better than mapping to a CUDA device.
-        os.makedirs(self.config.OUTPUT_LOG_DIR, exist_ok=True)
-        logger.add_filehandler(log_filename=os.path.join(self.config.OUTPUT_LOG_DIR,'eval_log.txt'))
         ckpt_dict = self.load_checkpoint(checkpoint_path, map_location="cpu")
 
-        self.results_dir = self._make_results_dir(self.config.EVAL.SPLIT)
+        self._make_results_dir(self.config.EVAL.SPLIT)
 
         if self.config.EVAL.USE_CKPT_CONFIG:
             conf = ckpt_dict["config"]
@@ -517,7 +468,7 @@ class ILEnvTrainer(BaseRLTrainer):
 
         logger.info(f"env config: {config}")
         self.envs = construct_envs(config, get_env_class(config.ENV_NAME))
-        self._setup_actor_critic_agent(il_cfg, config.MODEL)
+        self._setup_actor_critic_agent(il_cfg, config.MODEL, mode='online')
 
         self.agent.load_state_dict(ckpt_dict["state_dict"], strict=True)    
         self.policy = self.agent.model
@@ -571,13 +522,12 @@ class ILEnvTrainer(BaseRLTrainer):
                 number_of_eval_episodes = total_num_eps
 
         pbar = tqdm.tqdm(total=number_of_eval_episodes)
-        #import ipdb; ipdb.set_trace()
         while (
             len(stats_episodes) < number_of_eval_episodes
             and self.envs.num_envs > 0
         ):
             current_episodes = self.envs.current_episodes()
-            print(current_episode_steps, 'line 580 Current episodes', current_episodes[0].episode_id)
+
             with torch.no_grad():
                 if self.semantic_predictor is not None:
                     batch["semantic"] = self.semantic_predictor(batch["rgb"], batch["depth"])
@@ -605,10 +555,10 @@ class ILEnvTrainer(BaseRLTrainer):
             step_data = [a.item() for a in actions.to(device="cpu")]
 
             outputs = self.envs.step(step_data)
+
             observations, rewards_l, dones, infos = [
                 list(x) for x in zip(*outputs)
             ]
-            print(current_episode_steps, 'line 608 Current episodes', self.envs.current_episodes()[0].episode_id, dones)
             batch = batch_obs(observations, device=self.device)
             batch = apply_obs_transforms_batch(batch, self.obs_transforms)
 
@@ -623,7 +573,6 @@ class ILEnvTrainer(BaseRLTrainer):
             ).unsqueeze(1)
             current_episode_reward += rewards
             next_episodes = self.envs.current_episodes()
-            print(current_episode_steps, 'line 625 Next episodes', next_episodes[0].episode_id)
             envs_to_pause = []
             n_envs = self.envs.num_envs
             for i in range(n_envs):
@@ -632,11 +581,9 @@ class ILEnvTrainer(BaseRLTrainer):
                     next_episodes[i].episode_id,
                 ) in stats_episodes:
                     envs_to_pause.append(i)
-                #import ipdb; ipdb.set_trace()
+
                 # episode ended
                 if not_done_masks[i].item() == 0:
-                    import ipdb; ipdb.set_trace()
-                    print('Finish one episode')
                     pbar.update()
                     episode_stats = {}
                     episode_stats["reward"] = current_episode_reward[i].item()
@@ -647,7 +594,6 @@ class ILEnvTrainer(BaseRLTrainer):
                     current_episode_steps[i] = 0
 
                     # use scene_id + episode_id as unique id for storing stats
-                    #import ipdb; ipdb.set_trace()
                     stats_episodes[
                         (
                             current_episodes[i].scene_id,
@@ -675,7 +621,6 @@ class ILEnvTrainer(BaseRLTrainer):
                         {"rgb": batch["rgb"][i]}, infos[i]
                     )
                     rgb_frames[i].append(frame)
-                    #import ipdb; ipdb.set_trace()
 
             (
                 self.envs,
@@ -720,14 +665,5 @@ class ILEnvTrainer(BaseRLTrainer):
         metrics = {k: v for k, v in aggregated_stats.items() if k not in ["reward", "pred_reward"]}
         if len(metrics) > 0:
             writer.add_scalars("eval_metrics", metrics, step_id)
-        with open(os.path.join(self.results_dir['stats'],'metrics.json'),'w') as f:
-            json.dump(metrics, f)
-        stats_episodes_outputs = {}
-        for (scene, epi),c in stats_episodes.items():
-            stats_episodes_outputs[epi] = {**c, 'scene_path':scene}
-        with open(os.path.join(self.results_dir['stats'],'stats_episodes.json'),'w') as f:
-            json.dump(stats_episodes_outputs, f)
-        for k, v in metrics.items():
-            logger.info('{}:{:.3f}'.format(k, v))
 
         self.envs.close()

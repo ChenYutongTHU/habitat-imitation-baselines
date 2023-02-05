@@ -14,6 +14,7 @@ def make_videos(observations_list, output_prefix, ep_id):
 def run_reference_replay(
     cfg, num_episodes=None, output_prefix=None
 ):
+    import ipdb; ipdb.set_trace()
     possible_actions = cfg.TASK.POSSIBLE_ACTIONS  
     with habitat.Env(cfg) as env:
         total_success = 0
@@ -36,7 +37,7 @@ def run_reference_replay(
                 )
 
                 observations = env.step(action=action)
-
+                
                 info = env.get_metrics()
                 frame = observations_to_image({"rgb": observations["rgb"]}, info)
                 frame = append_text_to_image(frame, "Find and go to {}".format(episode.object_category))
