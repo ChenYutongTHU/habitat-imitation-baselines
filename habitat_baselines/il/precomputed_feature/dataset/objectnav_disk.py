@@ -9,6 +9,7 @@ https://github.com/Ram81/habitat-imitation-baselines/blob/master/examples/object
 #run training to see (is there any other input batch_os?) [Align current inputs with env-based inputs]
 4. 
 '''
+from typing import List
 import lmdb, torch, os, json
 import msgpack_numpy
 import numpy as np
@@ -106,7 +107,7 @@ def collate_fn(batch):
 class ObjectNavDisk_Dataset(Dataset):
     """Pytorch dataset for object navigation task for the entire split"""
 
-    def __init__(self, config, return_type, mode="train", use_iw=False, inflection_weight_coef=1.0, image_preprocess=None):
+    def __init__(self, config, return_type, mode="train", use_iw=False, inflection_weight_coef=1.0, image_resize=None, image_preprocess=None):
         """
         Args:
             env (habitat.Env): Habitat environment
@@ -114,29 +115,31 @@ class ObjectNavDisk_Dataset(Dataset):
             return_type: 'raw'/'feature'
             mode: 'train'/'val'
         """
-        scene_split_name = mode
+        #scene_split_name = mode
         # if content_scenes[0] != "*":
         #     scene_split_name = "_".join(content_scenes)
         self.config = config.TASK_CONFIG
+        split = self.config.DATASET.SPLIT
+        scene_split_name = mode
         self.return_type = return_type
         self.image_path, self.feature_path = {}, {}
-        self.image_path['rgb'] = config.DATASET.DATASET_PATH.IMAGE.RGB.format(split=mode, scene_split=scene_split_name)
-        self.image_path['depth'] = config.DATASET.DATASET_PATH.IMAGE.DEPTH.format(split=mode, scene_split=scene_split_name)
-        self.feature_path['rgb'] = config.DATASET.DATASET_PATH.FEATURE.RGB.format(split=mode, scene_split=scene_split_name)
-        self.feature_path['depth'] = config.DATASET.DATASET_PATH.FEATURE.DEPTH.format(split=mode, scene_split=scene_split_name)
+        self.image_path['rgb'] = self.config.DATASET.DATA_PATH_DISK.IMAGE.RGB.format(split=split, scene_split=scene_split_name)
+        self.image_path['depth'] = self.config.DATASET.DATA_PATH_DISK.IMAGE.DEPTH.format(split=split, scene_split=scene_split_name)
+        self.feature_path['rgb'] = self.config.DATASET.DATA_PATH_DISK.FEATURE.RGB.format(split=split, scene_split=scene_split_name)
+        self.feature_path['depth'] = self.config.DATASET.DATA_PATH_DISK.FEATURE.DEPTH.format(split=split, scene_split=scene_split_name)
         #self.label_path = config.DATASET.DATASET_PATH.LABEL.format(split=mode, scene_split=scene_split_name)
         
         self.config.defrost()
         #self.config.DATASET.CONTENT_SCENES = content_scenes #TODO  ? needed?
         self.config.freeze()
-
+        self.image_resize = image_resize
         self.resolution = [self.config.SIMULATOR.RGB_SENSOR.WIDTH, self.config.SIMULATOR.RGB_SENSOR.HEIGHT]
-        self.possible_actions = config.TASK_CONFIG.TASK.POSSIBLE_ACTIONS
+        self.possible_actions = self.config.TASK.POSSIBLE_ACTIONS
 
         self.total_actions = 0
         self.inflections = 0
         self.inflection_weight_coef = inflection_weight_coef
-
+        self.image_preprocess = image_preprocess
         if use_iw:
             self.inflec_weight = torch.tensor([1.0, inflection_weight_coef])
         else:
@@ -157,18 +160,31 @@ class ObjectNavDisk_Dataset(Dataset):
 
                 self.lmdb_env = lmdb.open(
                     self.image_path[self.image_type],
+                    map_size=int(2e12),
                     writemap=True,
                 )
 
-                self.count = 0
+                self.count, self.skip_eps = 0, 0
                 self.eps_start_inds = []
-                for episode in sorted(self.episodes, key=lambda e:e.episode_id):
-                    self.env.reset()
-                    state_index_queue = range(0, len(episode.reference_replay) - 1) #exclude the last one?
+                # import ipdb; ipdb.set_trace()
+                for ei in range(len(self.episodes)):#, key=lambda e:e.episode_id):
+                    try:
+                        self.env.reset()
+                    except:
+                        logger.info(f'{self.env.current_episode.episode_id} is_thda={self.env.current_episode.is_thda} Skip')
+                        self.skip_eps += 1
+                        continue
+                    episode = self.env.current_episode
+                    state_index_queue = range(1, len(episode.reference_replay) - 1) #exclude the last one?
                     self.eps_start_inds.append(self.count)
                     self.save_frames(state_index_queue, episode)
+                    logger.info(f'Finish episode {episode.episode_id} {len(self.eps_start_inds)}/{len(self.episodes)} step={len(state_index_queue)}')
+                    DEBUG = True
+                    if DEBUG:
+                        if len(self.eps_start_inds)>=3:
+                            break
                 #logger.info("Inflection weight coef: {}, N: {}, nI: {}".format(self.total_actions / self.inflections, self.total_actions, self.inflections))
-                logger.info(f"Image-{self.image_type} database ready! #episodes={len(self.eps_start_inds)}")
+                logger.info(f"Image-{self.image_type} database ready! #episodes={len(self.eps_start_inds)} skip {self.skip_eps} eps")
                 with open(self.image_path[self.image_type]+'.index', 'w') as f:
                     json.dump(self.eps_start_inds, f)
                 with open(self.feature_path[self.image_type]+'.index', 'w') as f:
@@ -188,7 +204,7 @@ class ObjectNavDisk_Dataset(Dataset):
 
         elif self.return_type=='feature':
             #assert self.label_cache_exists() #saved along with image
-            assert self.feature_cache_exists() 
+            assert self.feature_cache_exists(), self.feature_path
             logger.info("Dataset cache found.")
             self.lmdb_env, self.dataset_length = {}, None
             self.nitem_per_image = 2 #observation, demonstraion
@@ -212,8 +228,8 @@ class ObjectNavDisk_Dataset(Dataset):
                         logger.info(k, self.dataset_length, int(self.lmdb_env[k].begin().stat()["entries"] / self.nitem_per_image))
                         raise ValueError
                 self.lmdb_env[k].close()
-                self.lmdb_env[k] = None
                 logger.info(f'Load {fpath}, #episodes={len(self.eps_start_inds)}, #steps={self.dataset_length}')
+            self.lmdb_env = None
         else:
             raise ValueError
 
@@ -269,7 +285,7 @@ class ObjectNavDisk_Dataset(Dataset):
             observations = msgpack_numpy.unpackb(observations_binary, raw=False)
             for k, v in observations.items():
                 obs = np.array(v)
-                if k==self.image_type and self.image_preprocess!=None:
+                if k==self.image_type and self.image_preprocess is not None:
                     obs = self.image_preprocess(Image.fromarray(obs))
                     obs = np.array(obs)
                 observations[k] = torch.from_numpy(obs)  
@@ -280,7 +296,7 @@ class ObjectNavDisk_Dataset(Dataset):
             demonstrations = msgpack_numpy.unpackb(demonstrations_binary, raw=False)
             for k, v in demonstrations.items():
                 demo = np.array(v)
-                if k=='weights':
+                if k=='inflection_weight':
                     demo = torch.where(demo != 1.0, self.inflection_weight_coef, 1.0)
                 demonstrations[k] = demo
 
@@ -315,8 +331,8 @@ class ObjectNavDisk_Dataset(Dataset):
             demo_idx = "{0:0=6d}_demo".format(idx)
             demo_binary = self.lmdb_cursor['rgb'].get(demo_idx.encode()) #should be the same in rgb/depth
             demonstrations = msgpack_numpy.unpackb(demo_binary, raw=False)
-            demonstrations['weight'] = torch.where(demonstrations['weight'] != 1.0, self.inflection_weight_coef, 1.0)
-
+            #demonstrations['inflection_weight'] = torch.where(demonstrations['inflection_weight'] != 1.0, self.inflection_weight_coef, 1.0)
+            demonstrations['inflection_weight'] = self.inflection_weight_coef if demonstrations['inflection_weight']!=1.0 else 1.0
             return {'idx':idx, 'observations': observations, 'demonstrations': demonstrations}
         else:
             raise ValueError
@@ -343,13 +359,20 @@ class ObjectNavDisk_Dataset(Dataset):
             prev_action = self.possible_actions.index(prev_state.action) #update, go to the next step
 
             demonstrations, observations = {}, {}
-            observations[self.image_type].append(observation[self.image_type])
+            observations[self.image_type] = observation[self.image_type]
+            if self.image_resize is not None:
+                observations[self.image_type] = np.array(Image.fromarray(observations[self.image_type]).resize(self.image_resize))
             for k in ["objectgoal","compass","gps"]:
                 observations[k] = observation[k] #numpy
             demonstrations['prev_action'] = prev_action #int
             demonstrations['next_action'] = next_action #int
-            demonstrations['inflection_weight'].append(observation['inflection_weight']) #float
-            demonstrations['done'].append(True if si==(len(state_index_queue)-1) else False)
+            demonstrations['inflection_weight'] = observation['inflection_weight'] #float
+            if si==(len(state_index_queue)-1) or next_action=='STOP':
+                # import ipdb; ipdb.set_trace()
+                demonstrations['done'] = True 
+                break
+            else:
+                demonstrations['done'] = False
 
             sample_key = "{0:0=6d}".format(self.count) #(for one step rather than one episode!)
             with self.lmdb_env.begin(write=True) as txn:

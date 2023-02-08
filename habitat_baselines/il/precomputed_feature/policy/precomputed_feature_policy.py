@@ -38,20 +38,19 @@ class ObjectNavILNetPrecomputedfeature(Net):
         RNN state encoder
     """
 
-    def __init__(self, precomputed, observation_space: Space, model_config: Config, num_actions, device=None, mode='offline'):
+    def __init__(self, observation_space: Space, model_config: Config, num_actions, device=None, mode='offline'):
         super().__init__()
         self.model_config = model_config
-        self.precomputed = precomputed
         self.mode = mode
         rnn_input_size = 0
-
+        assert self.mode in ['online', 'offline'], self.mode
         if self.mode == 'offline':
             self.rgb_encoder = nn.Sequential(
-                nn.Linear(observation_space['rgb'].shape[-1], model_config.MODEL.RGB_ENCODER.output_size), 
+                nn.Linear(observation_space['rgb'].shape[-1], model_config.RGB_ENCODER.output_size), 
                 nn.ReLU(True),
             )
             self.depth_encoder = nn.Sequential(
-                nn.Linear(observation_space['depth'].shape[-1], model_config.MODEL.DEPTH_ENCODER.output_size), 
+                nn.Linear(observation_space['depth'].shape[-1], model_config.DEPTH_ENCODER.output_size), 
                 nn.ReLU(True),
             )
 
@@ -144,12 +143,13 @@ class ObjectNavILNetPrecomputedfeature(Net):
         if ObjectGoalSensor.cls_uuid in observation_space.spaces:
             self._n_object_categories = (
                 int(
-                    observation_space.spaces[ObjectGoalSensor.cls_uuid].high[0]
+                    observation_space.spaces[ObjectGoalSensor.cls_uuid].high[0] #TODO
                 )
                 + 1
             )
-            if self.is_thda:
-                self._n_object_categories = 28
+            import ipdb; ipdb.set_trace()
+            # if self.is_thda:
+            #     self._n_object_categories = 28
             logger.info("Object categories: {}".format(self._n_object_categories))
             self.obj_categories_embedding = nn.Embedding(
                 self._n_object_categories, 32
@@ -291,26 +291,26 @@ class ObjectNavILNetPrecomputedfeature(Net):
 @baseline_registry.register_policy
 class ObjectNavILPrecomputedfeaturePolicy(Policy):
     def __init__(
-        self, observation_space: Space, action_space: Space, model_config: Config, mode: str,
+        self, observation_space: Space, num_actions: int, model_config: Config, mode: str,
     ):
         super().__init__(
             ObjectNavILNetPrecomputedfeature(
                 observation_space=observation_space,
                 model_config=model_config,
-                num_actions=action_space.n,
+                num_actions=num_actions,
                 mode = mode
             ),
-            action_space.n,
+            num_actions,
             no_critic=True
         )
 
     @classmethod
     def from_config(
-        cls, config: Config, observation_space, action_space, mode
+        cls, config: Config, observation_space, num_actions, mode
     ):
         return cls(
             observation_space=observation_space,
-            action_space=action_space,
+            num_actions=num_actions,
             model_config=config.MODEL, 
             mode=mode           
         )

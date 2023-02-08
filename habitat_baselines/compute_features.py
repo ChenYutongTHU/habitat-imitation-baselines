@@ -5,7 +5,6 @@ import torch
 import numpy as np
 import msgpack_numpy
 import habitat
-from torch.utils.data import Dataloader
 from habitat import Config, logger
 from habitat_baselines.config.default import get_config
 from habitat_baselines.il.common.encoders.backbone import VisualPretrainedEncoder
@@ -43,21 +42,24 @@ def main():
         help="Modify config options from command line",
     )
     args = parser.parse_args()
+    opts = vars(args)['opts']
+    print(opts)
     cfg = get_config(args.exp_config, opts)
     cfg.defrost()
-    cfg.DATASET.DATA_PATH = args.path
-
-    os.makedirs(os.path.dirname(args.output_log), exists_ok=True)
+    cfg.freeze()
+    os.makedirs(os.path.dirname(args.output_log), exist_ok=True)
     logger.add_filehandler(args.output_log)
 
     model = VisualPretrainedEncoder(image_type=args.image_type, model_cfg=cfg)
+
     model.cuda()
     
     dataset = ObjectNavDisk_Dataset(
-        config=cfg, return_type=args.image_type, 
+        config=cfg, return_type='image_'+args.image_type, 
         mode=args.split, use_iw=False, inflection_weight_coef=1.0,
-        image_preprocess = model.preprocess):
-    dataloader = DataLoader(
+        image_resize=(224,224) if args.image_type=='image' else None,
+        image_preprocess = model.preprocess)
+    dataloader = torch.utils.data.DataLoader(
         dataset,
         collate_fn=ObjectNavDisk_collate_fn,
         #collate_fn=collate_fn, (collate_fn is only needed in training)
@@ -67,16 +69,18 @@ def main():
         drop_last=False,
     )
 
-    lmdb_env = lmdb.open(dataset.feature_path[args.image_type], writemap=True)
-    lmdb_txn = lmdb_env.begin()
+    lmdb_env = lmdb.open(dataset.feature_path[args.image_type], map_size=int(2e12), writemap=True)
     logger.info('Save feature in '+dataset.feature_path[args.image_type])
 
     pbar = tqdm(total=len(dataloader))
     count = 0
     eps_start_inds = []
+
+    DEBUG, debug_save = True, []
     with torch.no_grad():
         for batch in dataloader:
             #observations, demonstrations
+            debug_save.append(batch['observations'][args.image_type])
             visual_input = batch['observations'][args.image_type].cuda()
             visual_feature = model(visual_input)
             pbar.update()
@@ -89,12 +93,15 @@ def main():
                     observations[obs_key] = obs_value[bi].cpu().numpy()
                 demonstrations = {}
                 for demo_key, demo_value in batch['demonstrations'].items():
-                    demonstrations[demo_key] = demo_value[bi].cpu().numpy()              
-                lmdb_txn.put((sample_key + f"_obs").encode(),msgpack_numpy.packb(observations, use_bin_type=True))
-                lmdb_txn.put((sample_key + f"_demo").encode(),msgpack_numpy.packb(demonstrations, use_bin_type=True))
+                    demonstrations[demo_key] = demo_value[bi].cpu().numpy()  
+                with lmdb_env.begin(write=True) as txn:            
+                    txn.put((sample_key + f"_obs").encode(),msgpack_numpy.packb(observations, use_bin_type=True))
+                    txn.put((sample_key + f"_demo").encode(),msgpack_numpy.packb(demonstrations, use_bin_type=True))
+                count += 1
     lmdb_env.close()
-    logger.info(f'Finish! #Total count={count}')
-
+    logger.info(f'Finish! #Total count={count} visual_feature shape:{visual_feature[bi].cpu().numpy().shape}')
+    torch.save(debug_save, 'debug_save.bin')
 
 if __name__ == "__main__":
+    #import ipdb; ipdb.set_trace()
     main()

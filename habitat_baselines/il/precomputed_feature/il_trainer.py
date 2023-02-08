@@ -20,7 +20,7 @@ from gym import spaces
 from habitat import Config, logger
 from habitat.utils import profiling_wrapper
 from habitat.utils.visualizations.utils import observations_to_image
-from habitat.code.spaces import ActionSpace
+from habitat.core.spaces import ActionSpace
 from habitat_baselines.common.base_trainer import BaseRLTrainer
 from habitat_baselines.common.baseline_registry import baseline_registry
 from habitat_baselines.common.environments import get_env_class
@@ -84,7 +84,8 @@ class ILEnvTrainerPrecomputedfeature(BaseRLTrainer):
 
         policy = baseline_registry.get_policy(self.config.IL.POLICY.name)
         self.policy = policy.from_config(
-            self.config, self.obs_space, self.envs.action_spaces[0], mode=mode
+            #self.config, self.obs_space, self.envs.action_spaces[0], mode=mode
+            self.config, self.obs_space, self.envs.num_actions, mode=mode
         )
         self.policy.to(self.device)
 
@@ -259,7 +260,7 @@ class ILEnvTrainerPrecomputedfeature(BaseRLTrainer):
             il_cfg.num_steps,
             self.envs.num_envs,
             self.obs_space,
-            self.envs.action_spaces[0],
+            #self.envs.action_spaces[0],
             self.config.MODEL.STATE_ENCODER.hidden_size,
             self.config.MODEL.STATE_ENCODER.num_recurrent_layers,
         )

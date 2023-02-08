@@ -12,6 +12,7 @@ from habitat_baselines.il.disk_based.il_trainer import RearrangementBCTrainer
 from habitat_baselines.il.disk_based.il_ddp_trainer import RearrangementBCDistribTrainer
 from habitat_baselines.il.env_based.il_trainer import ILEnvTrainer
 from habitat_baselines.il.env_based.il_ddp_trainer import ILEnvDDPTrainer
+from habitat_baselines.il.precomputed_feature.il_trainer import ILEnvTrainerPrecomputedfeature
 
 __all__ = [
     "BaseTrainer",
@@ -23,4 +24,6 @@ __all__ = [
     "ILEnvDDPTrainer",
     "RearrangementBCTrainer",
     "RearrangementBCDistribTrainer",
+    "ILEnvTrainerPrecomputedfeature",
+    ""
 ]

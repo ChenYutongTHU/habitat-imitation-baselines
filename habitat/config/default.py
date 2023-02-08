@@ -369,6 +369,15 @@ _C.DATASET.CONTENT_SCENES = ["*"]
 _C.DATASET.DATA_PATH = (
     "data/datasets/pointnav/habitat-test-scenes/v1/{split}/{split}.json.gz"
 )
+_C.DATASET.DATA_PATH_DISK = CN()
+_C.DATASET.DATA_PATH_DISK.IMAGE = CN()
+_C.DATASET.DATA_PATH_DISK.IMAGE.RGB = "data/datasets/objectnav/objectnav_mp3d_70k/{split}/{scene_split}.image_rgb.db"
+_C.DATASET.DATA_PATH_DISK.IMAGE.DEPTH = "data/datasets/objectnav/objectnav_mp3d_70k/{split}/{scene_split}.image_depth.db"
+_C.DATASET.DATA_PATH_DISK.FEATURE = CN()
+_C.DATASET.DATA_PATH_DISK.FEATURE.RGB = "data/datasets/objectnav/objectnav_mp3d_70k/{split}/{scene_split}.rgb_resnet18.db"
+_C.DATASET.DATA_PATH_DISK.FEATURE.DEPTH = "data/datasets/objectnav/objectnav_mp3d_70k/{split}/{scene_split}.depth_resnet50.db"
+
+
 
 # -----------------------------------------------------------------------------
 

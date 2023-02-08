@@ -17,7 +17,6 @@ class RolloutStorage:
         num_steps,
         num_envs,
         observation_space,
-        action_space,
         recurrent_hidden_state_size,
         num_recurrent_layers=1,
     ):
@@ -40,14 +39,14 @@ class RolloutStorage:
         self.rewards = torch.zeros(num_steps, num_envs, 1)
 
         self.action_log_probs = torch.zeros(num_steps, num_envs, 1)
-        if action_space.__class__.__name__ == "ActionSpace":
-            action_shape = 1
-        else:
-            action_shape = action_space.shape[0]
+        # if action_space.__class__.__name__ == "ActionSpace":
+        #     action_shape = 1
+        # else:
+        #     action_shape = action_space.shape[0]
 
         self.actions = torch.zeros(num_steps, num_envs, 1)
         self.prev_actions = torch.zeros(num_steps + 1, num_envs, 1)
-        if action_space.__class__.__name__ == "ActionSpace":
+        if True:#action_space.__class__.__name__ == "ActionSpace":
             self.actions = self.actions.long()
             self.prev_actions = self.prev_actions.long()
 

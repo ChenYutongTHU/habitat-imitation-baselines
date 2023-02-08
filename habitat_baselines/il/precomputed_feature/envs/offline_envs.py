@@ -1,6 +1,7 @@
+from typing import Optional, Dict, List
 import torch
 from gym import spaces
-from habitat.code.spaces import ActionSpace
+from habitat.core.spaces import ActionSpace
 from habitat import Config, logger
 from habitat_baselines.il.precomputed_feature.dataset.objectnav_disk_loader import get_objectnav_loader
 from habitat_baselines.common.obs_transformers import (
@@ -10,6 +11,7 @@ from habitat_baselines.common.obs_transformers import (
 )
 from habitat_baselines.utils.common import batch_obs
 from collections import defaultdict
+import gzip, json, numpy as np
 
 def batch_envs(
     batches, 
@@ -35,14 +37,24 @@ class ObjectNavEnv_Offline(object):
         self.num_envs = config.NUM_PROCESSES
 
         self.dataloaders, self.observation_spaces, self.action_spaces = [], [], []
+        self.category_to_task_category_id = json.load(
+            gzip.open(self.config.TASK_CONFIG.DATASET.DATA_PATH.format(split=self.config.TASK_CONFIG.DATASET.SPLIT),'r'))['category_to_task_category_id']
+        max_value = max(self.category_to_task_category_id.values())
+        logger.info("max object cat: {}".format(max_value))
+        logger.info("cats: {}".format(self.category_to_task_category_id.values()))
         for i in range(self.num_envs):
             logger.info(f'Set up env {i}/{self.num_envs} ...')
             loader = get_objectnav_loader(config=config, env_id=i)
-            self.observation_spaces.append(spaces.Dict({
-                loader.dataset[0]['observation']
-            }))
+            space_dict = {}
+            for k, v in loader.dataset[0]['observations'].items():
+                if k=='objectgoal':
+                    space_dict[k] = spaces.Box(low=0, high=max_value, shape=v.shape, dtype=np.int64)
+                else:
+                    space_dict[k] = spaces.Space(shape=v.shape, dtype=v.dtype)
+            self.observation_spaces.append(spaces.Dict(space_dict))
             self.dataloaders.append(iter(loader))
-            self.action_spaces.append(ActionSpace(self.config.TASK_CONFIG.TASK.POSSIBLE_ACTIONS))
+        self.num_actions = self.config.TASK_CONFIG.TASK.POSSIBLE_ACTIONS
+            #self.action_spaces.append(ActionSpace(self.config.TASK_CONFIG.TASK.POSSIBLE_ACTIONS))
 
     def next_batch(self, device):
         batch = {'observations':[], 'demonstrations':[]}
