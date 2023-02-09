@@ -62,9 +62,10 @@ class ILAgent(nn.Module):
                 actions_batch,
                 prev_actions_batch,
                 masks_batch,
+                weights_batch,
                 idx
             ) = sample
-
+            # import ipdb; ipdb.set_trace()
             # Reshape to do in a single forward pass for all steps
             (
                 logits,
@@ -82,7 +83,7 @@ class ILAgent(nn.Module):
             action_loss = cross_entropy_loss(logits.permute(0, 2, 1), actions_batch.squeeze(-1))
 
             self.optimizer.zero_grad()
-            inflections_batch = obs_batch["inflection_weight"]
+            inflections_batch = weights_batch
 
             total_loss = ((inflections_batch * action_loss).sum(0) / inflections_batch.sum(0)).mean()
 

@@ -49,11 +49,12 @@ class ObjectNavILNetPrecomputedfeature(Net):
                 nn.Linear(observation_space['rgb'].shape[-1], model_config.RGB_ENCODER.output_size), 
                 nn.ReLU(True),
             )
+            rnn_input_size += model_config.RGB_ENCODER.output_size
             self.depth_encoder = nn.Sequential(
                 nn.Linear(observation_space['depth'].shape[-1], model_config.DEPTH_ENCODER.output_size), 
                 nn.ReLU(True),
             )
-
+            rnn_input_size += model_config.DEPTH_ENCODER.output_size
         elif self.mode == 'online':
             # Init the depth encoder
             self.depth_backbone = VisualPretrainedEncoder(
@@ -64,6 +65,7 @@ class ObjectNavILNetPrecomputedfeature(Net):
                 nn.ReLU(True),
             )
             self.depth_encoder = nn.Sequential(self.depth_backbone, self.depth_fc)
+            rnn_input_size += model_config.DEPTH_ENCODER.output_size
 
             # Init the RGB visual encoder
             self.rgb_backbone = VisualPretrainedEncoder(
@@ -73,6 +75,7 @@ class ObjectNavILNetPrecomputedfeature(Net):
                 nn.ReLU(True),
             )
             self.rgb_encoder = nn.Sequential(self.rgb_backbone, self.rgb_fc)
+            rnn_input_size += model_config.RGB_ENCODER.output_size
 
             sem_seg_output_size = 0
             self.semantic_predictor = None
@@ -147,7 +150,6 @@ class ObjectNavILNetPrecomputedfeature(Net):
                 )
                 + 1
             )
-            import ipdb; ipdb.set_trace()
             # if self.is_thda:
             #     self._n_object_categories = 28
             logger.info("Object categories: {}".format(self._n_object_categories))
@@ -224,8 +226,11 @@ class ObjectNavILNetPrecomputedfeature(Net):
                 observations["depth"] = depth_obs.contiguous().view(
                     -1, depth_obs.size(2), depth_obs.size(3), depth_obs.size(4)
                 )
-
-            depth_embedding = self.depth_encoder(observations)
+            if self.mode=='offline':
+                depth_embedding = self.depth_encoder(observations['depth'])
+                depth_embedding = depth_embedding.squeeze(1)
+            else:
+                depth_embedding = self.depth_encoder(observations)
             x.append(depth_embedding)
 
         if self.rgb_encoder is not None:
@@ -234,7 +239,11 @@ class ObjectNavILNetPrecomputedfeature(Net):
                     -1, rgb_obs.size(2), rgb_obs.size(3), rgb_obs.size(4)
                 )
 
-            rgb_embedding = self.rgb_encoder(observations)
+            if self.mode=='offline':
+                rgb_embedding = self.rgb_encoder(observations['rgb'])
+                rgb_embedding = rgb_embedding.squeeze(1)
+            else:
+                rgb_embedding = self.rgb_encoder(observations)
             x.append(rgb_embedding)
 
         if self.model_config.USE_SEMANTICS:
@@ -253,21 +262,21 @@ class ObjectNavILNetPrecomputedfeature(Net):
         if EpisodicGPSSensor.cls_uuid in observations:
             obs_gps = observations[EpisodicGPSSensor.cls_uuid]
             if len(obs_gps.size()) == 3:
-                obs_gps = obs_gps.contiguous().view(-1, obs_gps.size(2))
+                obs_gps = obs_gps.contiguous().view(-1, obs_gps.size(2)) #B,2
             x.append(self.gps_embedding(obs_gps))
         
         if EpisodicCompassSensor.cls_uuid in observations:
             obs_compass = observations["compass"]
             if len(obs_compass.size()) == 3:
-                obs_compass = obs_compass.contiguous().view(-1, obs_compass.size(2))
+                obs_compass = obs_compass.contiguous().view(-1, obs_compass.size(2)) #N,1
             compass_observations = torch.stack(
                 [
                     torch.cos(obs_compass),
                     torch.sin(obs_compass),
                 ],
                 -1,
-            )
-            compass_embedding = self.compass_embedding(compass_observations.squeeze(dim=1))
+            ) #N,1,2
+            compass_embedding = self.compass_embedding(compass_observations.squeeze(dim=1)) #n,2 #N,d
             x.append(compass_embedding)
 
         if ObjectGoalSensor.cls_uuid in observations:
@@ -281,7 +290,6 @@ class ObjectNavILNetPrecomputedfeature(Net):
                 ((prev_actions.float() + 1) * masks).long().view(-1)
             )
             x.append(prev_actions_embedding)
-        
         x = torch.cat(x, dim=1)
         x, rnn_hidden_states = self.state_encoder(x, rnn_hidden_states, masks)
 

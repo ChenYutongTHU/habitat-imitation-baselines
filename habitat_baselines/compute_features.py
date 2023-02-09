@@ -57,7 +57,7 @@ def main():
     dataset = ObjectNavDisk_Dataset(
         config=cfg, return_type='image_'+args.image_type, 
         mode=args.split, use_iw=False, inflection_weight_coef=1.0,
-        image_resize=(224,224) if args.image_type=='image' else None,
+        image_resize=(224,224) if args.image_type=='rgb' else None,
         image_preprocess = model.preprocess)
     dataloader = torch.utils.data.DataLoader(
         dataset,

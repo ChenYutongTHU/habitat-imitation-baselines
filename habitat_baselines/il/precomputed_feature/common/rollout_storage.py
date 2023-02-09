@@ -24,7 +24,7 @@ class RolloutStorage:
         self.num_steps = num_steps
         for sensor in observation_space.spaces:
             self.observations[sensor] = torch.zeros(
-                num_steps + 1,
+                num_steps, #num_steps + 1,
                 num_envs,
                 *observation_space.spaces[sensor].shape
             )
@@ -45,14 +45,17 @@ class RolloutStorage:
         #     action_shape = action_space.shape[0]
 
         self.actions = torch.zeros(num_steps, num_envs, 1)
-        self.prev_actions = torch.zeros(num_steps + 1, num_envs, 1)
+        #self.prev_actions = torch.zeros(num_steps + 1, num_envs, 1)
+        self.prev_actions = torch.zeros(num_steps, num_envs, 1)
         if True:#action_space.__class__.__name__ == "ActionSpace":
             self.actions = self.actions.long()
             self.prev_actions = self.prev_actions.long()
 
-        self.masks = torch.zeros(num_steps + 1, num_envs, 1)
-        self.episode_step_index = [1] * (num_steps + 1)
-
+        #self.masks = torch.zeros(num_steps + 1, num_envs, 1)
+        self.masks = torch.zeros(num_steps, num_envs, 1)
+        self.weights =torch.ones(num_steps, num_envs, 1)
+        #self.episode_step_index = [1] * (num_steps + 1)
+        self.episode_step_index = [1] * (num_steps)
         self.num_steps = num_steps
         self.num_envs = num_envs
         self.step = 0
@@ -67,25 +70,34 @@ class RolloutStorage:
         self.actions = self.actions.to(device)
         self.prev_actions = self.prev_actions.to(device)
         self.masks = self.masks.to(device)
+        self.weights = self.weights.to(device)
 
     def insert_batch(
         self,
         observations_batch, #'rgb':(T,num_envs,D)
         actions_batch,
+        prev_actions_batch,
         rewards_batch,
         masks_batch,
+        weights_batch
     ):
         assert actions_batch.shape[0] == self.num_steps, (actions_batch.shape, self.num_steps)
         for sensor in observations_batch:
-            self.observations[sensor][1:].copy_(
-                observations_batch[sensor]
-            )
-        self.actions[:].copy_(actions_batch)
-        self.prev_actions[1:].copy_(actions_batch)
-        self.rewards[:].copy_(rewards_batch)
-        self.masks[1:].copy_(masks_batch)
-
-        self.step = self.step + self.num_steps
+            # self.observations[sensor].copy_(
+            #     observations_batch[sensor]
+            # )
+            self.observations[sensor] = observations_batch[sensor]
+        '''
+        self.actions.copy_(actions_batch)
+        self.prev_actions.copy_(prev_actions_batch)
+        self.rewards.copy_(rewards_batch)
+        self.masks.copy_(masks_batch)
+        self.weights.copy_(weights_batch)
+        '''
+        self.actions, self.prev_actions = actions_batch, prev_actions_batch
+        self.rewards = rewards_batch
+        self.masks, self.weights = masks_batch, weights_batch
+        self.step = self.step + self.num_steps #0->self.num_steps
 
     def insert(
         self,
@@ -112,6 +124,14 @@ class RolloutStorage:
                 self.episode_step_index[i] = 1
 
     def after_update(self, rnn_hidden_states):
+        self.recurrent_hidden_states[0].copy_(
+            rnn_hidden_states.detach()
+        )
+        self.step = 0
+
+
+
+    def after_update_old(self, rnn_hidden_states):
         for sensor in self.observations:
             self.observations[sensor][0].copy_(
                 self.observations[sensor][self.step]
@@ -145,6 +165,7 @@ class RolloutStorage:
             actions_batch = []
             prev_actions_batch = []
             masks_batch = []
+            weights_batch = []
             index_batch = []
 
             for offset in range(num_envs_per_batch):
@@ -166,6 +187,7 @@ class RolloutStorage:
                 actions_batch.append(self.actions[: self.step, ind])
                 prev_actions_batch.append(self.prev_actions[: self.step, ind])
                 masks_batch.append(self.masks[: self.step, ind])
+                weights_batch.append(self.weights[: self.step,ind])
                 index_batch.append(ind)
 
             T, N = self.step, num_envs_per_batch
@@ -179,7 +201,7 @@ class RolloutStorage:
             actions_batch = torch.stack(actions_batch, 1)
             prev_actions_batch = torch.stack(prev_actions_batch, 1)
             masks_batch = torch.stack(masks_batch, 1)
-
+            weights_batch = torch.stack(weights_batch, 1)
             # States is just a (num_recurrent_layers, N, -1) tensor
             recurrent_hidden_states_batch = torch.stack(
                 recurrent_hidden_states_batch, 1
@@ -191,6 +213,7 @@ class RolloutStorage:
                 actions_batch,
                 prev_actions_batch,
                 masks_batch,
+                weights_batch, 
                 index_batch
             )
 

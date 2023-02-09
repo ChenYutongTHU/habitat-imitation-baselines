@@ -53,7 +53,7 @@ class ObjectNavEnv_Offline(object):
                     space_dict[k] = spaces.Space(shape=v.shape, dtype=v.dtype)
             self.observation_spaces.append(spaces.Dict(space_dict))
             self.dataloaders.append(iter(loader))
-        self.num_actions = self.config.TASK_CONFIG.TASK.POSSIBLE_ACTIONS
+        self.num_actions = len(self.config.TASK_CONFIG.TASK.POSSIBLE_ACTIONS)
             #self.action_spaces.append(ActionSpace(self.config.TASK_CONFIG.TASK.POSSIBLE_ACTIONS))
 
     def next_batch(self, device):
@@ -68,4 +68,6 @@ class ObjectNavEnv_Offline(object):
     
     def close(self):
         return
-
+    
+    def reset(self):
+        return

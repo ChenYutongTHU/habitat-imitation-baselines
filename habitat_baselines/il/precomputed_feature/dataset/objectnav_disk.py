@@ -138,7 +138,7 @@ class ObjectNavDisk_Dataset(Dataset):
 
         self.total_actions = 0
         self.inflections = 0
-        self.inflection_weight_coef = inflection_weight_coef
+        self.inflection_weight_coef = self.config.TASK.INFLECTION_WEIGHT_SENSOR.INFLECTION_COEF
         self.image_preprocess = image_preprocess
         if use_iw:
             self.inflec_weight = torch.tensor([1.0, inflection_weight_coef])
@@ -169,20 +169,16 @@ class ObjectNavDisk_Dataset(Dataset):
                 # import ipdb; ipdb.set_trace()
                 for ei in range(len(self.episodes)):#, key=lambda e:e.episode_id):
                     try:
-                        self.env.reset()
+                        self.init_observation = self.env.reset()
                     except:
                         logger.info(f'{self.env.current_episode.episode_id} is_thda={self.env.current_episode.is_thda} Skip')
                         self.skip_eps += 1
                         continue
                     episode = self.env.current_episode
-                    state_index_queue = range(1, len(episode.reference_replay) - 1) #exclude the last one?
+                    state_index_queue = range(0, len(episode.reference_replay) - 1) #exclude the last one? (what will happen after STOP)
                     self.eps_start_inds.append(self.count)
                     self.save_frames(state_index_queue, episode)
                     logger.info(f'Finish episode {episode.episode_id} {len(self.eps_start_inds)}/{len(self.episodes)} step={len(state_index_queue)}')
-                    DEBUG = True
-                    if DEBUG:
-                        if len(self.eps_start_inds)>=3:
-                            break
                 #logger.info("Inflection weight coef: {}, N: {}, nI: {}".format(self.total_actions / self.inflections, self.total_actions, self.inflections))
                 logger.info(f"Image-{self.image_type} database ready! #episodes={len(self.eps_start_inds)} skip {self.skip_eps} eps")
                 with open(self.image_path[self.image_type]+'.index', 'w') as f:
@@ -297,7 +293,7 @@ class ObjectNavDisk_Dataset(Dataset):
             for k, v in demonstrations.items():
                 demo = np.array(v)
                 if k=='inflection_weight':
-                    demo = torch.where(demo != 1.0, self.inflection_weight_coef, 1.0)
+                    demo = self.inflection_weight_coef if demo!=1.0 else 1.0
                 demonstrations[k] = demo
 
 
@@ -350,7 +346,11 @@ class ObjectNavDisk_Dataset(Dataset):
         logger.info("Replay len: {}".format(len(reference_replay)))
         for si, state_index in enumerate(state_index_queue):
             action = self.possible_actions.index(reference_replay[state_index].action)
-            observation = self.env.step(action=action)
+            #import ipdb; ipdb.set_trace()
+            if si==0 and action==0:
+                observation = self.init_observation
+            else:
+                observation = self.env.step(action=action)
 
             next_state = reference_replay[state_index + 1]
             next_action = self.possible_actions.index(next_state.action)
@@ -361,16 +361,22 @@ class ObjectNavDisk_Dataset(Dataset):
             demonstrations, observations = {}, {}
             observations[self.image_type] = observation[self.image_type]
             if self.image_resize is not None:
-                observations[self.image_type] = np.array(Image.fromarray(observations[self.image_type]).resize(self.image_resize))
+                from PIL import Image
+                observations[self.image_type] = np.array((Image.fromarray(observations[self.image_type]).resize(self.image_resize)))
             for k in ["objectgoal","compass","gps"]:
                 observations[k] = observation[k] #numpy
             demonstrations['prev_action'] = prev_action #int
             demonstrations['next_action'] = next_action #int
-            demonstrations['inflection_weight'] = observation['inflection_weight'] #float
+            #demonstrations['inflection_weight'] = observation['inflection_weight'] #float !!
+            
+            if si==0 or next_action!=prev_action:
+                demonstrations['inflection_weight'] = self.inflection_weight_coef
+            else:
+                demonstrations['inflection_weight'] = 1
+            #print(demonstrations['inflection_weight'],self.inflection_weight_coef)
             if si==(len(state_index_queue)-1) or next_action=='STOP':
                 # import ipdb; ipdb.set_trace()
                 demonstrations['done'] = True 
-                break
             else:
                 demonstrations['done'] = False
 
@@ -380,3 +386,6 @@ class ObjectNavDisk_Dataset(Dataset):
                 txn.put((sample_key + "_demo").encode(), msgpack_numpy.packb(demonstrations, use_bin_type=True))
             
             self.count += 1 
+
+            if demonstrations['done'] == True:
+                break

@@ -197,14 +197,17 @@ class ILEnvTrainerPrecomputedfeature(BaseRLTrainer):
     def _collect_rollout_batch(self, rollouts):
         batch = self.envs.next_batch(device=self.device)
         rewards_batch = rollouts.rewards
-        actions_batch = batch['demonstrations'] ##T,E,1
-        masks_batch = (not batch['done']).unsqueeze(-1) #T,E,1
-
+        actions_batch = batch['demonstrations']['next_action'].unsqueeze(-1) ##T,E,1
+        prev_actions_batch = batch['demonstrations']['prev_action'].unsqueeze(-1)
+        masks_batch = (batch['demonstrations']['done']!=True).unsqueeze(-1) #T,E,1
+        weights_batch = batch['demonstrations']['inflection_weight']
         rollouts.insert_batch(
             observations_batch = batch['observations'],
             actions_batch = actions_batch, #demonstrations? (next! or this noe)
+            prev_actions_batch=prev_actions_batch,
             rewards_batch = rewards_batch,
-            masks_batch = masks_batch, #need a mark!
+            masks_batch = masks_batch, #need a mask!
+            weights_batch = weights_batch
         )
 
     @profiling_wrapper.RangeContext("_update_agent")
@@ -266,13 +269,13 @@ class ILEnvTrainerPrecomputedfeature(BaseRLTrainer):
         )
         rollouts.to(self.device)
 
+        '''
         observations = self.envs.reset()
         batch = batch_obs(observations, device=self.device)
         batch = apply_obs_transforms_batch(batch, self.obs_transforms)
 
         for sensor in rollouts.observations:
             rollouts.observations[sensor][0].copy_(batch[sensor]) #copy the first step
-            '''
             # Use first semantic observations from RedNet predictor as well
             if sensor == "semantic" and self.config.MODEL.USE_PRED_SEMANTICS:
                 semantic_obs = self.semantic_predictor(batch["rgb"], batch["depth"])
@@ -280,8 +283,7 @@ class ILEnvTrainerPrecomputedfeature(BaseRLTrainer):
                 if self.config.MODEL.SEMANTIC_ENCODER.is_thda:
                     semantic_obs = semantic_obs - 1
                 rollouts.observations[sensor][0].copy_(semantic_obs)
-            '''
-
+        '''
         # batch and observations may contain shared PyTorch CUDA
         # tensors.  We must explicitly clear them here otherwise
         # they will be kept in memory for the entire duration of training!
@@ -342,7 +344,7 @@ class ILEnvTrainerPrecomputedfeature(BaseRLTrainer):
                     count_steps += delta_steps
                 profiling_wrapper.range_pop()  # rollouts loop
                 '''
-                self._collect_rollout_batch() #return il_cfg.num_steps (batch) of samples 
+                self._collect_rollout_batch(rollouts) #return il_cfg.num_steps (batch) of samples 
                 (
                     delta_pth_time,
                     total_loss
