@@ -16,7 +16,7 @@ import torch
 import tqdm
 from torch.optim.lr_scheduler import LambdaLR
 from gym import spaces
-
+from PIL import Image
 from habitat import Config, logger
 from habitat.utils import profiling_wrapper
 from habitat.utils.visualizations.utils import observations_to_image
@@ -70,7 +70,7 @@ class ILEnvTrainerPrecomputedfeature(BaseRLTrainer):
 
 
         observation_space = self.envs.observation_spaces[0]
-        self.obs_transforms = get_active_obs_transforms(self.config)
+        self.obs_transforms = get_active_obs_transforms(self.config) #empty
         observation_space = apply_obs_transforms_obs_space(
             observation_space, self.obs_transforms
         )
@@ -84,8 +84,9 @@ class ILEnvTrainerPrecomputedfeature(BaseRLTrainer):
 
         policy = baseline_registry.get_policy(self.config.IL.POLICY.name)
         self.policy = policy.from_config(
-            #self.config, self.obs_space, self.envs.action_spaces[0], mode=mode
-            self.config, self.obs_space, self.envs.num_actions, mode=mode
+            self.config, self.obs_space, 
+            self.envs.action_spaces[0].n if mode=='online' else self.envs.num_actions,
+            mode=mode
         )
         self.policy.to(self.device)
 
@@ -136,7 +137,7 @@ class ILEnvTrainerPrecomputedfeature(BaseRLTrainer):
         }
         if extra_state is not None:
             checkpoint["extra_state"] = extra_state
-
+        logger.info('Save as {}'.format(os.path.join(self.config.CHECKPOINT_FOLDER, file_name)))
         torch.save(
             checkpoint, os.path.join(self.config.CHECKPOINT_FOLDER, file_name)
         )
@@ -199,7 +200,7 @@ class ILEnvTrainerPrecomputedfeature(BaseRLTrainer):
         rewards_batch = rollouts.rewards
         actions_batch = batch['demonstrations']['next_action'].unsqueeze(-1) ##T,E,1
         prev_actions_batch = batch['demonstrations']['prev_action'].unsqueeze(-1)
-        masks_batch = (batch['demonstrations']['done']!=True).unsqueeze(-1) #T,E,1
+        masks_batch = (batch['demonstrations']['prev_action']!=0).unsqueeze(-1) #T,E,1 #prev_action!=STOP
         weights_batch = batch['demonstrations']['inflection_weight']
         rollouts.insert_batch(
             observations_batch = batch['observations'],
@@ -428,7 +429,25 @@ class ILEnvTrainerPrecomputedfeature(BaseRLTrainer):
                 profiling_wrapper.range_pop()  # train update
 
             self.envs.close()
+    
+    def apply_rgb_preprocess(self, observation):
+        for i in range(len(observation)):
+            img_pil = Image.fromarray(observation[i]['rgb'])
+            img_pil = img_pil.resize((224,224))
+            observation[i]['rgb'] = np.array(self.rgb_preprocess(img_pil))
+        return observation
 
+    def apply_rgb_postprocess(self, rgb): #C,H,W
+        if rgb.shape[0]==3:
+            rgb = rgb.permute(1,2,0)
+        #import ipdb; ipdb.set_trace()
+        rgb = self.rgb_unnormalize(rgb.cpu())
+        rgb = rgb.numpy()
+        rgb = (rgb*255).astype(np.uint8)
+        rgb = Image.fromarray(rgb).resize((640,480))
+        rgb = np.array(rgb)
+        return rgb
+    
     def _eval_checkpoint(
         self,
         checkpoint_path: str,
@@ -473,11 +492,14 @@ class ILEnvTrainerPrecomputedfeature(BaseRLTrainer):
         self.envs = construct_envs(config, get_env_class(config.ENV_NAME))
         self._setup_actor_critic_agent(il_cfg, config.MODEL, mode='online')
 
-        self.agent.load_state_dict(ckpt_dict["state_dict"], strict=True)    
+        msg = self.agent.load_state_dict(ckpt_dict["state_dict"], strict=False) 
         self.policy = self.agent.model
         self.policy.eval()
+        self.rgb_preprocess = self.policy.net.rgb_backbone.preprocess
+        self.rgb_unnormalize = self.policy.net.rgb_backbone.unnormalize
+        observations = self.envs.reset() #len ()
+        observations = self.apply_rgb_preprocess(observations)
 
-        observations = self.envs.reset()
         batch = batch_obs(observations, device=self.device)
         batch = apply_obs_transforms_batch(batch, self.obs_transforms)
 
@@ -562,6 +584,7 @@ class ILEnvTrainerPrecomputedfeature(BaseRLTrainer):
             observations, rewards_l, dones, infos = [
                 list(x) for x in zip(*outputs)
             ]
+            observations = self.apply_rgb_preprocess(observations)
             batch = batch_obs(observations, device=self.device)
             batch = apply_obs_transforms_batch(batch, self.obs_transforms)
 
@@ -621,7 +644,7 @@ class ILEnvTrainerPrecomputedfeature(BaseRLTrainer):
                 elif len(self.config.VIDEO_OPTION) > 0:
                     # TODO move normalization / channel changing out of the policy and undo it here
                     frame = observations_to_image(
-                        {"rgb": batch["rgb"][i]}, infos[i]
+                        {"rgb": self.apply_rgb_postprocess(batch["rgb"][i])}, infos[i]
                     )
                     rgb_frames[i].append(frame)
 

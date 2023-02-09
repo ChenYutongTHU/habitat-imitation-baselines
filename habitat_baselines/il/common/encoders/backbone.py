@@ -20,6 +20,7 @@ from habitat_baselines.il.common.encoders.resnet_encoders import VlnResnetDepthE
 from habitat_baselines.utils.common import Flatten
 from habitat import logger
 
+ 
 def freeze_model(model):
     for param in model.parameters():
         param.requires_grad = False
@@ -29,13 +30,19 @@ def freeze_model(model):
     model.eval()
     return model
 
+def unnormalize(y, mean, std):
+    mean = torch.tensor(mean)[None,None,:] #[1,1,1,3]
+    std = torch.tensor(std)[None,None,:]
+    x = std*y+mean 
+    return x
+
 class VisualPretrainedEncoder(nn.Module):
     def __init__(self, image_type, model_cfg, checkpoint=None):
         super().__init__()
         self.image_type = image_type
         assert self.image_type in ['rgb','depth']
         if self.image_type=='rgb':
-            self.model_type = model_cfg.MODEL.RGB_ENCODER.TYPE
+            self.model_type = model_cfg.RGB_ENCODER.TYPE
             if self.model_type=='resnet50':
                 resnet_model = torchvision.models.resnet50(pretrained=True)
                 resnet_model = torch.nn.Sequential(*list(resnet_model.children())[:-2])
@@ -50,12 +57,16 @@ class VisualPretrainedEncoder(nn.Module):
                         std=[0.229, 0.224, 0.225]
                     )
                 ])
+                self.unnormalize = lambda y: unnormalize(y, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
                 #self.output_dim = np.prod() #TODO fixed
             elif 'CLIP' in self.model_type:
                 clip_type = self.model_type.replace('CLIP_','')
                 if clip_type=='ViT-B32':
                     clip_type='ViT-B/32'
                 clip_model, self.preprocess = clip.load(clip_type, device=torch.device('cpu'))
+                self.unnormalize = lambda y: unnormalize(y, 
+                    mean=[0.48145466, 0.4578275, 0.40821073], 
+                    std=[0.26862954, 0.26130258, 0.27577711])
                 if self.model_type=='CLIP_RN50':
                     self.output_dim = 2048
                     self.visual_encoder = clip_model.visual
@@ -69,11 +80,12 @@ class VisualPretrainedEncoder(nn.Module):
                 raise ValueError
 
         elif self.image_type=='depth':
-            self.model_type = model_cfg.MODEL.DEPTH_ENCODER.TYPE
+            self.model_type = model_cfg.DEPTH_ENCODER.TYPE
             assert self.model_type=='resnet50', self.model_type
+            logger.info('Load checkpoint from {}'.format(model_cfg.DEPTH_ENCODER.ddppo_checkpoint))
             self.visual_encoder = VlnResnetDepthEncoder(
                 observation_space=spaces.Dict({"depth": spaces.Space(shape=[480,640,1])}), 
-                checkpoint=model_cfg.MODEL.DEPTH_ENCODER.ddppo_checkpoint,
+                checkpoint=model_cfg.DEPTH_ENCODER.ddppo_checkpoint,
                 output_size=128, backbone='resnet50',
                 trainable=False
             )

@@ -50,7 +50,7 @@ def main():
     os.makedirs(os.path.dirname(args.output_log), exist_ok=True)
     logger.add_filehandler(args.output_log)
 
-    model = VisualPretrainedEncoder(image_type=args.image_type, model_cfg=cfg)
+    model = VisualPretrainedEncoder(image_type=args.image_type, model_cfg=cfg.MODEL)
 
     model.cuda()
     

@@ -1,5 +1,7 @@
 # Byte-compiled / optimized / DLL files
 anything.py
+logs/
+*.zip
 anything.ipynb
 job_scripts/
 habitat_baselines/configs

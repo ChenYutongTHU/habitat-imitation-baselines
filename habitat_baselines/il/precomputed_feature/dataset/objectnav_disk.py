@@ -19,6 +19,8 @@ import habitat
 from PIL import Image
 from collections import defaultdict
 from habitat_baselines.utils.common import batch_obs
+from habitat_baselines.utils.env_utils import make_env_fn
+from habitat_baselines.common.environments import get_env_class
 
 class ObservationsDict(dict):
     def pin_memory(self):
@@ -149,7 +151,8 @@ class ObjectNavDisk_Dataset(Dataset):
         if self.return_type in ['image_rgb','image_depth']:
             self.image_type = self.return_type.split('_')[1]
             if not self.image_cache_exists(self.image_type):
-                self.env = habitat.Env(config=self.config)
+                #self.env = habitat.Env(config=self.config)
+                self.env = make_env_fn(config, get_env_class(config.ENV_NAME))
                 self.episodes = self.env.episodes 
                 logger.info(
                     f"Dataset cache not found. Saving {self.image_type} scene images"
@@ -166,10 +169,13 @@ class ObjectNavDisk_Dataset(Dataset):
 
                 self.count, self.skip_eps = 0, 0
                 self.eps_start_inds = []
-                # import ipdb; ipdb.set_trace()
                 for ei in range(len(self.episodes)):#, key=lambda e:e.episode_id):
                     try:
                         self.init_observation = self.env.reset()
+                        # from PIL import Image
+                        # Image.fromarray(self.init_observation['rgb']).save('debug/0.png')
+                        # print('Save as debug/0.png')
+                        # import ipdb; ipdb.set_trace()
                     except:
                         logger.info(f'{self.env.current_episode.episode_id} is_thda={self.env.current_episode.is_thda} Skip')
                         self.skip_eps += 1
@@ -346,11 +352,10 @@ class ObjectNavDisk_Dataset(Dataset):
         logger.info("Replay len: {}".format(len(reference_replay)))
         for si, state_index in enumerate(state_index_queue):
             action = self.possible_actions.index(reference_replay[state_index].action)
-            #import ipdb; ipdb.set_trace()
             if si==0 and action==0:
-                observation = self.init_observation
+                observation = self.init_observation              
             else:
-                observation = self.env.step(action=action)
+                observation = self.env.step(action=action)[0]
 
             next_state = reference_replay[state_index + 1]
             next_action = self.possible_actions.index(next_state.action)
@@ -375,7 +380,6 @@ class ObjectNavDisk_Dataset(Dataset):
                 demonstrations['inflection_weight'] = 1
             #print(demonstrations['inflection_weight'],self.inflection_weight_coef)
             if si==(len(state_index_queue)-1) or next_action=='STOP':
-                # import ipdb; ipdb.set_trace()
                 demonstrations['done'] = True 
             else:
                 demonstrations['done'] = False

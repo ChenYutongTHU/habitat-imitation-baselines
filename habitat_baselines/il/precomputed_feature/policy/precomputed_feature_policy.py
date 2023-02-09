@@ -59,22 +59,22 @@ class ObjectNavILNetPrecomputedfeature(Net):
             # Init the depth encoder
             self.depth_backbone = VisualPretrainedEncoder(
                 image_type='depth', model_cfg=model_config)
-            self.depth_fc = nn.Sequential(
+            self.depth_encoder = nn.Sequential(
                 #Flatten(),
-                nn.Linear(self.depth_backbone.output_dim, model_config.MODEL.DEPTH_ENCODER.output_size),
+                nn.Linear(self.depth_backbone.output_dim, model_config.DEPTH_ENCODER.output_size),
                 nn.ReLU(True),
             )
-            self.depth_encoder = nn.Sequential(self.depth_backbone, self.depth_fc)
+            #self.depth_encoder = nn.Sequential(self.depth_backbone, self.depth_fc)
             rnn_input_size += model_config.DEPTH_ENCODER.output_size
 
             # Init the RGB visual encoder
             self.rgb_backbone = VisualPretrainedEncoder(
                 image_type='rgb', model_cfg=model_config)
-            self.rgb_fc = nn.Sequential(
-                nn.Linear(self.rgb_backbone.output_dim, model_config.MODEL.RGB_ENCODER.output_size), #TODO 
+            self.rgb_encoder = nn.Sequential(
+                nn.Linear(self.rgb_backbone.output_dim, model_config.RGB_ENCODER.output_size), #TODO 
                 nn.ReLU(True),
             )
-            self.rgb_encoder = nn.Sequential(self.rgb_backbone, self.rgb_fc)
+            #self.rgb_encoder = nn.Sequential(self.rgb_backbone, self.rgb_fc)
             rnn_input_size += model_config.RGB_ENCODER.output_size
 
             sem_seg_output_size = 0
@@ -230,7 +230,8 @@ class ObjectNavILNetPrecomputedfeature(Net):
                 depth_embedding = self.depth_encoder(observations['depth'])
                 depth_embedding = depth_embedding.squeeze(1)
             else:
-                depth_embedding = self.depth_encoder(observations)
+                depth_embedding = self.depth_backbone(observations['depth'])
+                depth_embedding = self.depth_encoder(depth_embedding)
             x.append(depth_embedding)
 
         if self.rgb_encoder is not None:
@@ -243,7 +244,8 @@ class ObjectNavILNetPrecomputedfeature(Net):
                 rgb_embedding = self.rgb_encoder(observations['rgb'])
                 rgb_embedding = rgb_embedding.squeeze(1)
             else:
-                rgb_embedding = self.rgb_encoder(observations)
+                rgb_embedding = self.rgb_backbone(observations['rgb'])
+                rgb_embedding = self.rgb_encoder(rgb_embedding )
             x.append(rgb_embedding)
 
         if self.model_config.USE_SEMANTICS:
