@@ -1,36 +1,44 @@
 # Note:  This is an example config, see habitat_baselines/config/pointnav/ppo_pointnav.yaml
 # for better hyperparameters for actual training
-
-BASE_TASK_CONFIG_PATH: "configs/tasks/objectnav_mp3d_il.yaml"
-TRAINER_NAME: "il-trainer"
+BASE_TASK_CONFIG_PATH: "configs/tasks/objectnav_mp3d_il_disk.yaml"
+TRAINER_NAME: "il-trainer-precomputedfeature"
 ENV_NAME: NavRLEnv
 SIMULATOR_GPU_ID: 0
 TORCH_GPU_ID: 0
 VIDEO_OPTION: ["disk"]
-TENSORBOARD_DIR: "/data-mount/experiments/released_results_val/tb"
-VIDEO_DIR: "/data-mount/experiments/released_results_val/video"
+TENSORBOARD_DIR: "tb/objectnav/overfitting/rgbd/seed_1/"
+VIDEO_DIR: "video_dir/objectnav/overfitting/rgbd/seed_1/"
 # To evaluate on all episodes, set this to -1
 TEST_EPISODE_COUNT: 10
 EVAL_CKPT_PATH_DIR: "data/new_checkpoints/objectnav/objectnav_env_v4/rgbd/seed_1_70M/ckpt.22.pth"
-SHOW_TOP_DOWN_MAP: False
+SHOW_TOP_DOWN_MAP: True
 NUM_PROCESSES: 1
 CHECKPOINT_FOLDER: "data/new_checkpoints/objectnav/overfitting/rgbd/seed_1"
-OUTPUT_LOG_DIR: /data-mount/experiments/released_results_val/log
+OUTPUT_LOG_DIR: data/objectnav/logs
 LOG_INTERVAL: 10
 LOG_METRICS: True
 CHECKPOINT_INTERVAL: 100
 SENSORS: ['RGB_SENSOR', 'SEMANTIC_SENSOR', 'DEPTH_SENSOR']
-RESULTS_DIR: "/data-mount/experiments/released_results_val/results/{split}/{type}"
-EVAL_RESUTLS_DIR: "/data-mount/experiments/released_results_val/results"
+RESULTS_DIR: "data/objectnav/results/{split}/{type}"
+EVAL_RESUTLS_DIR: "data/objectnav/results/"
 EVAL_SAVE_RESULTS: True
 EVAL_SAVE_RESULTS_INTERVAL: 50
 NUM_UPDATES: 1000
+NUM_WORKERS: 2
+
+SPACES:
+  OBS:
+    RGB: #TODO RN50: ViT-B32: 
+    DEPTH: #TODO RN50:
+  ACTION:
+  
+
 EVAL:
   SPLIT: "val"
 
 IL:
   POLICY:
-    name: "ObjectNavILPolicy"
+    name: "ObjectNavILPrecomputedfeaturePolicy"
 
   USE_IW: True
   distrib_backend: GLOO
@@ -64,12 +72,11 @@ MODEL:
   embed_goal_seg: False
   sem_seg_pred: True
   NO_VISION: False
-  USE_SEMANTICS: True
+  USE_SEMANTICS: False
   USE_PRED_SEMANTICS: True
   SWITCH_TO_PRED_SEMANTICS_UPDATE: 0
   SEMANTIC_ENCODER:
-    #rednet_ckpt: "data/rednet-models/rednet_semmap_mp3d_tuned.pth"
-    rednet_ckpt: "/data-mount/experiments/released_models/rednet_semmap_mp3d_tuned.pth"
+    rednet_ckpt: "data/rednet-models/rednet_semmap_mp3d_tuned.pth"
     cnn_type: "ResnetSemSegEncoder"
     output_size: 256
     backbone: "resnet18"
@@ -78,17 +85,18 @@ MODEL:
     is_thda: True
     num_classes: 29
   RGB_ENCODER:
+    TYPE: "cnn"
     cnn_type: "ResnetRGBEncoder"
     output_size: 256
     backbone: "resnet18"
     train_encoder: True
   DEPTH_ENCODER:
+    TYPE: resnet50
     cnn_type: "VlnResnetDepthEncoder"
     output_size: 128
     backbone: "resnet50"
     trainable: False
-    #ddppo_checkpoint: "data/ddppo-models/gibson-2plus-resnet50.pth"
-    ddppo_checkpoint: "/data-mount/experiments/released_models/gibson-2plus-resnet50.pth"
+    ddppo_checkpoint: "/data-mount/ddppo-models/gibson-2plus-resnet50.pth"
   STATE_ENCODER:
     hidden_size: 2048
     rnn_type: "GRU"

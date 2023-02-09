@@ -45,12 +45,12 @@ TASK:
     INFLECTION_COEF: 3.477512060914205
   INFLECTION_WEIGHT_SENSOR_UUID: "inflection_weight"
 
-  MEASUREMENTS: ['DISTANCE_TO_GOAL', 'SUCCESS', 'SPL', 'SOFT_SPL', 'GOAL_OBJECT_VISIBLE', 'TOP_DOWN_MAP']
+  MEASUREMENTS: ['DISTANCE_TO_GOAL', 'SUCCESS', 'SPL', 'SOFT_SPL', 'GOAL_OBJECT_VISIBLE'] #, 'TOP_DOWN_MAP']
 
   TOP_DOWN_MAP:
-    DRAW_GOAL_AABBS: True
-    DRAW_SHORTEST_PATH: True
-    DARW_GOAL_VIEW_POINTS: True
+    DRAW_GOAL_AABBS: False
+    DRAW_SHORTEST_PATH: False
+    DARW_GOAL_VIEW_POINTS: False
 
   ROOM_VISITATION_MAP:
     TYPE: "RoomVisitationMap"
@@ -68,8 +68,21 @@ TASK:
 SEED: 103
 DATASET:
   TYPE: ObjectNav-v2
-  SPLIT: train
+  SPLIT: train_mini
   DATA_PATH: "data/datasets/objectnav/objectnav_mp3d_70k/{split}/{split}.json.gz"
+  DATA_PATH_DISK: 
+    IMAGE: 
+      RGB: "/data-mount/datasets/objectnav/objectnav_mp3d_70k/{split}/{scene_split}.image_rgb.db"
+      DEPTH: "/data-mount/datasets/objectnav/objectnav_mp3d_70k/{split}/{scene_split}.image_depth.db"
+    FEATURE:
+      RGB: "/data-mount/datasets/objectnav/objectnav_mp3d_70k/{split}/{scene_split}.rgb_resnet18.db"
+      DEPTH: "/data-mount/datasets/objectnav/objectnav_mp3d_70k/{split}/{scene_split}.depth_resnet50.db"
   SCENES_DIR: "data/scene_datasets/"
   MAX_REPLAY_STEPS: 500
 
+# DATASET:
+#   TYPE: ObjectNav-v2
+#   SPLIT: train
+#   DATA_PATH: "data/datasets/objectnav/objectnav_mp3d_70k/{split}/{split}.json.gz"
+#   SCENES_DIR: "data/scene_datasets/"
+#   MAX_REPLAY_STEPS: 500
